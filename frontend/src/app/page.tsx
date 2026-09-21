@@ -50,8 +50,14 @@ import {
   ChevronUp,
   HelpCircle,
   Eye,
-  EyeOff
+  EyeOff,
+  Brain
 } from "lucide-react";
+import { ArchitectureCanvas } from "@/components/ArchitectureCanvas";
+import { ComparisonMatrixModal } from "@/components/ComparisonMatrixModal";
+import { FlashcardsModal } from "@/components/FlashcardsModal";
+import { MockInterviewModal } from "@/components/MockInterviewModal";
+
 
 interface ChannelItem {
   id: string;
@@ -166,8 +172,14 @@ export default function VaultPage() {
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [selectedChannel, setSelectedChannel] = useState<string>("ALL");
   const [libraryFilter, setLibraryFilter] = useState<"all" | "inbox" | "watch_later" | "watched" | "favorites">("all");
-  const [activeTab, setActiveTab] = useState<"transcript" | "related" | "notes" | "llm" | "snapshots">("transcript");
+  const [activeTab, setActiveTab] = useState<"transcript" | "related" | "notes" | "llm" | "snapshots" | "architecture">("transcript");
   const [loading, setLoading] = useState<boolean>(true);
+
+  // PHASE 2 & 3: Architecture Canvas, Comparison Matrix, Flashcards & Mock Interview
+  const [showComparisonMatrix, setShowComparisonMatrix] = useState(false);
+  const [showFlashcards, setShowFlashcards] = useState(false);
+  const [showMockInterview, setShowMockInterview] = useState(false);
+
 
   // Multi-video comparison modal
   const [showCompareModal, setShowCompareModal] = useState(false);
@@ -927,8 +939,39 @@ export default function VaultPage() {
             title="Export problem notes and chapters to Obsidian or Notion"
           >
             <Download className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Export to Obsidian</span>
+            <span className="hidden sm:inline">Export</span>
           </button>
+
+          {/* ⚖️ Comparison Matrix Modal Button */}
+          <button
+            onClick={() => setShowComparisonMatrix(true)}
+            className="text-xs font-bold px-3 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 flex items-center gap-1.5 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-colors shadow-sm"
+            title="Cross-channel comparison matrix of top creator architectures"
+          >
+            <GitCompare className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Matrix</span>
+          </button>
+
+          {/* 🧠 Spaced Repetition Flashcards (SM-2) */}
+          <button
+            onClick={() => setShowFlashcards(true)}
+            className="text-xs font-bold px-3 py-1.5 rounded-lg bg-purple-50 dark:bg-purple-950/40 text-purple-600 dark:text-purple-300 border border-purple-200 dark:border-purple-800 flex items-center gap-1.5 hover:bg-purple-100 dark:hover:bg-purple-900/40 transition-colors shadow-sm"
+            title="Spaced repetition flashcards (SM-2 algorithm)"
+          >
+            <Brain className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Flashcards</span>
+          </button>
+
+          {/* ⏱️ 45-Minute Mock Interview Simulation Mode */}
+          <button
+            onClick={() => setShowMockInterview(true)}
+            className="text-xs font-bold px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1.5 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors shadow-sm"
+            title="45-Minute Senior/Staff Mock Interview Simulation Mode"
+          >
+            <Clock className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Mock (45m)</span>
+          </button>
+
 
           {/* 🎙️ Batch Auto-Transcriber */}
           <button
@@ -1467,6 +1510,18 @@ export default function VaultPage() {
                 LLM
               </button>
               <button
+                onClick={() => setActiveTab("architecture")}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all ${
+                  activeTab === "architecture"
+                    ? "bg-cyan-500 text-slate-950 shadow font-bold"
+                    : "text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
+                }`}
+                title="Live Mermaid Architecture Canvas"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                Canvas
+              </button>
+              <button
                 onClick={() => setActiveTab("notes")}
                 className={`flex-1 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all ${
                   activeTab === "notes"
@@ -1478,6 +1533,7 @@ export default function VaultPage() {
                 <StickyNote className="w-3.5 h-3.5" />
                 Notes
               </button>
+
             </div>
 
             {/* TAB 1: Complete Readable Transcript Reader */}
@@ -1790,7 +1846,20 @@ export default function VaultPage() {
                 </div>
               </div>
             )}
+
+            {/* TAB 6: Live Architecture Canvas */}
+            {activeTab === "architecture" && (
+              <div className="flex-1 overflow-hidden p-2 flex flex-col h-full bg-slate-950">
+                <ArchitectureCanvas
+                  videoId={selectedVideoId}
+                  videoTitle={videoDetail?.title || "System Architecture"}
+                  theme={isDark ? "dark" : "light"}
+                  apiBase="http://127.0.0.1:8000"
+                />
+              </div>
+            )}
           </aside>
+
         ) : (
           /* Collapsed Right Strip Handle */
           <div
@@ -2548,6 +2617,29 @@ export default function VaultPage() {
           </div>
         </div>
       )}
+
+      {/* 9. ⚖️ CROSS-CHANNEL ARCHITECTURAL COMPARISON MATRIX MODAL */}
+      <ComparisonMatrixModal
+        isOpen={showComparisonMatrix}
+        onClose={() => setShowComparisonMatrix(false)}
+        apiBase="http://127.0.0.1:8000"
+        onSelectVideo={(id) => setSelectedVideoId(id)}
+      />
+
+      {/* 10. 🧠 SPACED REPETITION FLASHCARDS (SUPERMEMO-2) MODAL */}
+      <FlashcardsModal
+        isOpen={showFlashcards}
+        onClose={() => setShowFlashcards(false)}
+        apiBase="http://127.0.0.1:8000"
+      />
+
+      {/* 11. ⏱️ 45-MINUTE MOCK INTERVIEW SIMULATOR MODAL */}
+      <MockInterviewModal
+        isOpen={showMockInterview}
+        onClose={() => setShowMockInterview(false)}
+        apiBase="http://127.0.0.1:8000"
+      />
     </div>
   );
 }
+

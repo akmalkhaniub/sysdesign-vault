@@ -7,11 +7,19 @@ from pydantic import BaseModel
 from datetime import datetime
 
 from database import get_db, init_db, async_session
-from models import Channel, Video, Transcript, VideoRelation, Note, DiagramSnapshot, VideoChapter
+from models import (
+    Channel, Video, Transcript, VideoRelation, Note, DiagramSnapshot, VideoChapter,
+    ArchitectureDiagram, Flashcard, MockInterviewSession
+)
 from channel_sync import resolve_channel_id, fetch_recent_videos_from_rss, KNOWN_CHANNEL_IDS
 from transcript_parser import parse_raw_transcript, parse_raw_chapters
 from search_service import search_transcripts_and_chapters
 from export_service import generate_video_markdown, generate_full_obsidian_vault_zip, sanitize_filename
+from diagram_presets import PALETTE_SNIPPETS, DEFAULT_SYSTEM_DIAGRAMS
+from comparison_data import COMPARISON_TOPICS
+from flashcard_data import SEED_FLASHCARDS
+from spaced_repetition import calculate_sm2_review
+from mock_interview_data import MOCK_INTERVIEW_PROMPTS
 
 app = FastAPI(title="System Design Vault API", version="2.0.0")
 
@@ -753,4 +761,290 @@ async def export_obsidian_vault(db: AsyncSession = Depends(get_db)):
         media_type="application/zip",
         headers={"Content-Disposition": 'attachment; filename="SystemDesignVault_Obsidian.zip"'}
     )
+
+# ---------------------------------------------------------------------------
+# PHASE 2: ARCHITECTURE CANVAS & COMPARISON MATRIX ENDPOINTS
+# ---------------------------------------------------------------------------
+
+class DiagramSaveRequest(BaseModel):
+    title: str
+    mermaid_code: str
+    diagram_type: Optional[str] = "flowchart"
+    description: Optional[str] = None
+    topic_slug: Optional[str] = None
+
+@app.get("/api/diagrams/palette")
+async def get_diagram_palette():
+    """Retrieve pre-configured Mermaid architecture component templates."""
+    return PALETTE_SNIPPETS
+
+@app.get("/api/diagrams/{video_id}")
+async def get_diagram_for_video(video_id: str, db: AsyncSession = Depends(get_db)):
+    """Fetch the saved diagram for a video, or fallback to default preset."""
+    # Check if a custom saved diagram exists
+    stmt = select(ArchitectureDiagram).where(ArchitectureDiagram.video_id == video_id).order_by(ArchitectureDiagram.updated_at.desc())
+    res = await db.execute(stmt)
+    diagram = res.scalars().first()
+
+    if diagram:
+        return {
+            "id": diagram.id,
+            "video_id": diagram.video_id,
+            "topic_slug": diagram.topic_slug,
+            "title": diagram.title,
+            "mermaid_code": diagram.mermaid_code,
+            "diagram_type": diagram.diagram_type,
+            "is_custom": True,
+            "updated_at": diagram.updated_at.isoformat() if diagram.updated_at else None
+        }
+
+    # If no custom diagram, check presets
+    video = await db.get(Video, video_id)
+    preset = None
+    if video_id in DEFAULT_SYSTEM_DIAGRAMS:
+        preset = DEFAULT_SYSTEM_DIAGRAMS[video_id]
+    elif video and video.topic_slug in DEFAULT_SYSTEM_DIAGRAMS:
+        preset = DEFAULT_SYSTEM_DIAGRAMS[video.topic_slug]
+    else:
+        # Default generic starter diagram
+        title_display = video.title if video else "System Architecture"
+        preset = {
+            "title": f"Architecture: {title_display}",
+            "topic_slug": video.topic_slug if video else "system-design",
+            "diagram_type": "flowchart",
+            "mermaid_code": f"""flowchart TD
+    Client([Client App / Browser]) --> LB[Load Balancer]
+    LB --> Gateway[API Gateway]
+    Gateway --> AppService[Application Service]
+    AppService --> Cache[(Redis Cache)]
+    AppService --> PrimaryDB[(Primary Database)]
+    PrimaryDB -.-> ReplicaDB[(Read Replica)]"""
+        }
+
+    return {
+        "id": 0,
+        "video_id": video_id,
+        "topic_slug": preset.get("topic_slug", ""),
+        "title": preset.get("title", "Architecture Diagram"),
+        "mermaid_code": preset.get("mermaid_code", ""),
+        "diagram_type": preset.get("diagram_type", "flowchart"),
+        "is_custom": False,
+        "updated_at": None
+    }
+
+@app.post("/api/diagrams/{video_id}")
+async def save_diagram_for_video(video_id: str, req: DiagramSaveRequest, db: AsyncSession = Depends(get_db)):
+    """Save or update the Mermaid diagram for a video."""
+    stmt = select(ArchitectureDiagram).where(ArchitectureDiagram.video_id == video_id)
+    res = await db.execute(stmt)
+    diagram = res.scalars().first()
+
+    if diagram:
+        diagram.title = req.title
+        diagram.mermaid_code = req.mermaid_code
+        diagram.diagram_type = req.diagram_type or "flowchart"
+        diagram.description = req.description
+        diagram.topic_slug = req.topic_slug
+        diagram.updated_at = datetime.utcnow()
+    else:
+        diagram = ArchitectureDiagram(
+            video_id=video_id,
+            topic_slug=req.topic_slug,
+            title=req.title,
+            mermaid_code=req.mermaid_code,
+            diagram_type=req.diagram_type or "flowchart",
+            description=req.description
+        )
+        db.add(diagram)
+
+    await db.commit()
+    await db.refresh(diagram)
+    return {"success": True, "id": diagram.id, "title": diagram.title}
+
+@app.get("/api/comparisons")
+async def list_comparisons():
+    """List available cross-channel multi-perspective comparison topics."""
+    return [
+        {
+            "slug": t["slug"],
+            "title": t["title"],
+            "category": t["category"],
+            "creators_count": len(t["creators"]),
+            "key_challenges": t["key_challenges"]
+        }
+        for t in COMPARISON_TOPICS
+    ]
+
+@app.get("/api/comparisons/{slug}")
+async def get_comparison_detail(slug: str):
+    """Retrieve full deep comparison matrix for a specific problem."""
+    for t in COMPARISON_TOPICS:
+        if t["slug"] == slug:
+            return t
+    raise HTTPException(status_code=404, detail="Comparison topic not found")
+
+
+# ---------------------------------------------------------------------------
+# PHASE 3: SPACED REPETITION FLASHCARDS & MOCK INTERVIEW SIMULATOR ENDPOINTS
+# ---------------------------------------------------------------------------
+
+class FlashcardReviewRequest(BaseModel):
+    quality: int  # 1: Again, 3: Hard, 4: Good, 5: Easy
+
+class FlashcardCreateRequest(BaseModel):
+    category: str
+    front: str
+    back: str
+    explanation: Optional[str] = None
+    topic_slug: Optional[str] = None
+    video_id: Optional[str] = None
+
+@app.get("/api/flashcards")
+async def list_flashcards(due_only: bool = False, category: Optional[str] = None, db: AsyncSession = Depends(get_db)):
+    """List flashcards, optionally filtering by due status or category."""
+    # If table is empty, auto-seed with standard high-yield questions
+    count_stmt = select(func.count(Flashcard.id))
+    total_count = (await db.execute(count_stmt)).scalar_one()
+    if total_count == 0:
+        for card_data in SEED_FLASHCARDS:
+            card = Flashcard(
+                category=card_data["category"],
+                topic_slug=card_data["topic_slug"],
+                front=card_data["front"],
+                back=card_data["back"],
+                explanation=card_data.get("explanation"),
+                next_review_at=datetime.utcnow()
+            )
+            db.add(card)
+        await db.commit()
+
+    query = select(Flashcard)
+    if due_only:
+        query = query.where(Flashcard.next_review_at <= datetime.utcnow())
+    if category:
+        query = query.where(Flashcard.category == category)
+    query = query.order_by(Flashcard.next_review_at.asc())
+
+    cards = (await db.execute(query)).scalars().all()
+    now = datetime.utcnow()
+
+    return [
+        {
+            "id": c.id,
+            "category": c.category,
+            "topic_slug": c.topic_slug,
+            "front": c.front,
+            "back": c.back,
+            "explanation": c.explanation,
+            "repetition": c.repetition,
+            "interval_days": c.interval_days,
+            "ease_factor": c.ease_factor,
+            "is_due": c.next_review_at <= now,
+            "next_review_at": c.next_review_at.isoformat() if c.next_review_at else None
+        }
+        for c in cards
+    ]
+
+@app.post("/api/flashcards/{card_id}/review")
+async def review_flashcard(card_id: int, req: FlashcardReviewRequest, db: AsyncSession = Depends(get_db)):
+    """Apply SuperMemo-2 spaced repetition calculation on review response."""
+    card = await db.get(Flashcard, card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Flashcard not found")
+
+    new_rep, new_int, new_ef, next_rev = calculate_sm2_review(
+        quality=req.quality,
+        repetition=card.repetition or 0,
+        interval_days=card.interval_days or 0.0,
+        ease_factor=card.ease_factor or 2.5
+    )
+
+    card.repetition = new_rep
+    card.interval_days = new_int
+    card.ease_factor = new_ef
+    card.next_review_at = next_rev
+    card.last_reviewed_at = datetime.utcnow()
+
+    await db.commit()
+    await db.refresh(card)
+
+    return {
+        "id": card.id,
+        "repetition": card.repetition,
+        "interval_days": card.interval_days,
+        "ease_factor": card.ease_factor,
+        "next_review_at": card.next_review_at.isoformat()
+    }
+
+@app.post("/api/flashcards")
+async def create_flashcard(req: FlashcardCreateRequest, db: AsyncSession = Depends(get_db)):
+    """Create a new custom user flashcard."""
+    card = Flashcard(
+        category=req.category,
+        front=req.front,
+        back=req.back,
+        explanation=req.explanation,
+        topic_slug=req.topic_slug or "general",
+        video_id=req.video_id,
+        next_review_at=datetime.utcnow()
+    )
+    db.add(card)
+    await db.commit()
+    await db.refresh(card)
+    return {"success": True, "id": card.id}
+
+@app.get("/api/mock-interview/prompts")
+async def get_mock_interview_prompts():
+    """Get structured 45-minute mock interview prompts with 5-phase guidelines and rubrics."""
+    return MOCK_INTERVIEW_PROMPTS
+
+class MockSessionSaveRequest(BaseModel):
+    topic_slug: str
+    title: str
+    current_phase: Optional[str] = "requirements"
+    notes: Optional[str] = None
+    capacity_math: Optional[str] = None
+    architecture_mermaid: Optional[str] = None
+    rubric_scores: Optional[str] = None
+    status: Optional[str] = "in_progress"
+
+@app.post("/api/mock-interview/sessions")
+async def save_mock_interview_session(req: MockSessionSaveRequest, db: AsyncSession = Depends(get_db)):
+    """Save or log a mock interview rehearsal attempt."""
+    session = MockInterviewSession(
+        topic_slug=req.topic_slug,
+        title=req.title,
+        current_phase=req.current_phase or "requirements",
+        notes=req.notes,
+        capacity_math=req.capacity_math,
+        architecture_mermaid=req.architecture_mermaid,
+        rubric_scores=req.rubric_scores,
+        status=req.status or "completed",
+        completed_at=datetime.utcnow() if req.status == "completed" else None
+    )
+    db.add(session)
+    await db.commit()
+    await db.refresh(session)
+    return {"success": True, "id": session.id}
+
+@app.get("/api/mock-interview/sessions")
+async def list_mock_interview_sessions(db: AsyncSession = Depends(get_db)):
+    """List completed and in-progress mock interview rehearsals."""
+    stmt = select(MockInterviewSession).order_by(MockInterviewSession.started_at.desc())
+    res = await db.execute(stmt)
+    sessions = res.scalars().all()
+    return [
+        {
+            "id": s.id,
+            "topic_slug": s.topic_slug,
+            "title": s.title,
+            "duration_minutes": s.duration_minutes,
+            "current_phase": s.current_phase,
+            "status": s.status,
+            "started_at": s.started_at.isoformat() if s.started_at else None,
+            "completed_at": s.completed_at.isoformat() if s.completed_at else None
+        }
+        for s in sessions
+    ]
+
 

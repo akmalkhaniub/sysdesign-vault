@@ -114,3 +114,57 @@ class VideoChapter(Base):
     title = Column(String(300), nullable=False)
 
     video = relationship("Video", back_populates="chapters")
+
+
+class ArchitectureDiagram(Base):
+    __tablename__ = "architecture_diagrams"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    video_id = Column(String(50), ForeignKey("videos.id"), nullable=True, index=True)
+    topic_slug = Column(String(100), nullable=True, index=True)
+    title = Column(String(300), nullable=False)
+    description = Column(Text, nullable=True)
+    mermaid_code = Column(Text, nullable=False)
+    diagram_type = Column(String(50), default="flowchart")  # flowchart, sequence, state, class
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    video = relationship("Video", backref="diagrams")
+
+
+class Flashcard(Base):
+    __tablename__ = "flashcards"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    video_id = Column(String(50), ForeignKey("videos.id"), nullable=True, index=True)
+    topic_slug = Column(String(100), nullable=True, index=True)
+    category = Column(String(100), nullable=False, default="System Design", index=True)
+    front = Column(Text, nullable=False)
+    back = Column(Text, nullable=False)
+    explanation = Column(Text, nullable=True)
+    
+    # SM-2 Spaced Repetition fields
+    repetition = Column(Integer, default=0)
+    interval_days = Column(Float, default=0.0)
+    ease_factor = Column(Float, default=2.5)
+    next_review_at = Column(DateTime, default=datetime.utcnow, index=True)
+    last_reviewed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class MockInterviewSession(Base):
+    __tablename__ = "mock_interview_sessions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    topic_slug = Column(String(100), nullable=False, index=True)
+    title = Column(String(300), nullable=False)
+    duration_minutes = Column(Integer, default=45)
+    current_phase = Column(String(50), default="requirements")
+    notes = Column(Text, nullable=True)
+    capacity_math = Column(Text, nullable=True)
+    architecture_mermaid = Column(Text, nullable=True)
+    rubric_scores = Column(Text, nullable=True)  # JSON string
+    status = Column(String(50), default="in_progress")  # in_progress, completed, abandoned
+    started_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
