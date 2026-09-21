@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, func, delete
@@ -10,8 +10,10 @@ from database import get_db, init_db, async_session
 from models import Channel, Video, Transcript, VideoRelation, Note, DiagramSnapshot, VideoChapter
 from channel_sync import resolve_channel_id, fetch_recent_videos_from_rss, KNOWN_CHANNEL_IDS
 from transcript_parser import parse_raw_transcript, parse_raw_chapters
+from search_service import search_transcripts_and_chapters
+from export_service import generate_video_markdown, generate_full_obsidian_vault_zip, sanitize_filename
 
-app = FastAPI(title="System Design Vault API", version="1.4.0")
+app = FastAPI(title="System Design Vault API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -696,3 +698,59 @@ async def delete_note(note_id: int, db: AsyncSession = Depends(get_db)):
     await db.delete(note)
     await db.commit()
     return {"success": True}
+
+# ---------------------------------------------------------------------------
+# PHASE 1: GLOBAL TRANSCRIPT SEARCH & OBSIDIAN EXPORT ENDPOINTS
+# ---------------------------------------------------------------------------
+
+@app.get("/api/search/transcripts")
+async def search_transcripts_global(
+    q: str = Query(..., min_length=1),
+    channel_id: Optional[str] = Query(None),
+    limit: int = Query(40, le=100),
+    db: AsyncSession = Depends(get_db)
+):
+    """Global fast full-text search across all transcripts and milestone chapters."""
+    return await search_transcripts_and_chapters(db, q, channel_id, limit)
+
+@app.get("/api/export/markdown/{video_id}")
+async def export_video_markdown(video_id: str, db: AsyncSession = Depends(get_db)):
+    """Generate and download Obsidian/Notion-compatible Markdown note for a single video."""
+    video = await db.get(Video, video_id)
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    ch = await db.get(Channel, video.channel_id)
+    chapters = (await db.execute(select(VideoChapter).where(VideoChapter.video_id == video_id).order_by(VideoChapter.start_time))).scalars().all()
+    transcripts = (await db.execute(select(Transcript).where(Transcript.video_id == video_id).order_by(Transcript.start_time))).scalars().all()
+    notes = (await db.execute(select(Note).where(Note.video_id == video_id))).scalars().all()
+    snapshots = (await db.execute(select(DiagramSnapshot).where(DiagramSnapshot.video_id == video_id))).scalars().all()
+
+    rel_stmt = (
+        select(VideoRelation, Video, Channel)
+        .join(Video, VideoRelation.target_video_id == Video.id)
+        .join(Channel, Video.channel_id == Channel.id)
+        .where(VideoRelation.source_video_id == video_id)
+    )
+    rel_rows = (await db.execute(rel_stmt)).all()
+    related = [{"id": vid.id, "title": vid.title, "channel_name": ch_rel.name, "similarity_note": vr.similarity_note} for vr, vid, ch_rel in rel_rows]
+
+    md_content = generate_video_markdown(video, ch, chapters, transcripts, notes, snapshots, related)
+    filename = f"{sanitize_filename(video.title[:60])}.md"
+
+    return Response(
+        content=md_content,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
+@app.get("/api/export/obsidian-vault")
+async def export_obsidian_vault(db: AsyncSession = Depends(get_db)):
+    """Generate and stream a complete Zettelkasten Obsidian Vault zip archive."""
+    zip_bytes = await generate_full_obsidian_vault_zip(db)
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="SystemDesignVault_Obsidian.zip"'}
+    )
+

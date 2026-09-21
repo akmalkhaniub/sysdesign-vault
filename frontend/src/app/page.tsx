@@ -218,6 +218,27 @@ export default function VaultPage() {
   const [copiedJsHelper, setCopiedJsHelper] = useState(false);
   const [activeCenterView, setActiveCenterView] = useState<"transcript" | "chapters">("transcript");
 
+  // PHASE 1: Global Transcript Search & Obsidian Export State
+  const [showGlobalSearch, setShowGlobalSearch] = useState(false);
+  const [globalSearchQuery, setGlobalSearchQuery] = useState("");
+  const [globalSearchResults, setGlobalSearchResults] = useState<any[]>([]);
+  const [globalSearchLoading, setGlobalSearchLoading] = useState(false);
+  const [globalSearchChannel, setGlobalSearchChannel] = useState("ALL");
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [copiedMarkdownText, setCopiedMarkdownText] = useState(false);
+
+  // Global Ctrl+K / Cmd+K Search Hotkey
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setShowGlobalSearch((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
   // Sync theme
   useEffect(() => {
     const saved = localStorage.getItem("vault_theme");
@@ -717,6 +738,52 @@ export default function VaultPage() {
     setTimeout(() => setCopiedJsHelper(false), 2500);
   };
 
+  // Phase 1: Search Transcripts Global Handler
+  const handleSearchTranscripts = async (q: string, ch: string) => {
+    if (!q.trim()) {
+      setGlobalSearchResults([]);
+      return;
+    }
+    setGlobalSearchLoading(true);
+    try {
+      const chParam = ch !== "ALL" ? `&channel_id=${encodeURIComponent(ch)}` : "";
+      const res = await fetch(`${API_BASE}/search/transcripts?q=${encodeURIComponent(q)}${chParam}`);
+      if (res.ok) {
+        const data = await res.json();
+        setGlobalSearchResults(data.results || []);
+      }
+    } catch (err) {
+      console.error("Global search error:", err);
+    } finally {
+      setGlobalSearchLoading(false);
+    }
+  };
+
+  // Phase 1: Obsidian Exporters
+  const handleDownloadSingleMarkdown = () => {
+    if (!selectedVideoId) return;
+    window.open(`${API_BASE}/export/markdown/${selectedVideoId}`, "_blank");
+  };
+
+  const handleDownloadFullVault = () => {
+    window.open(`${API_BASE}/export/obsidian-vault`, "_blank");
+  };
+
+  const handleCopyMarkdownToClipboard = async () => {
+    if (!selectedVideoId) return;
+    try {
+      const res = await fetch(`${API_BASE}/export/markdown/${selectedVideoId}`);
+      if (res.ok) {
+        const mdText = await res.text();
+        await navigator.clipboard.writeText(mdText);
+        setCopiedMarkdownText(true);
+        setTimeout(() => setCopiedMarkdownText(false), 2500);
+      }
+    } catch (err) {
+      console.error("Failed to copy markdown:", err);
+    }
+  };
+
   // Create Note
   const handleAddNote = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -840,20 +907,29 @@ export default function VaultPage() {
           </div>
         </div>
 
-        {/* Center Search Bar */}
-        <div className="flex-1 max-w-md mx-4 relative">
+        {/* Center Search Bar with Ctrl+K trigger */}
+        <div className="flex-1 max-w-md mx-4 relative cursor-pointer" onClick={() => setShowGlobalSearch(true)}>
           <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            placeholder="Search problems, topics, algorithms (e.g. WhatsApp, Rate Limiter)..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-slate-100 dark:bg-[#131b2e] border border-slate-200 dark:border-slate-700/60 rounded-xl pl-10 pr-4 py-2 text-xs sm:text-sm text-slate-800 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all"
-          />
+          <div className="w-full bg-slate-100 dark:bg-[#131b2e] border border-slate-200 dark:border-slate-700/60 rounded-xl pl-10 pr-4 py-2 text-xs sm:text-sm text-slate-500 dark:text-slate-400 flex items-center justify-between hover:border-cyan-500 transition-all">
+            <span className="truncate">Search all transcripts & chapters...</span>
+            <kbd className="hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-mono bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded text-slate-500">
+              Ctrl+K
+            </kbd>
+          </div>
         </div>
 
         {/* Action Controls */}
         <div className="flex items-center gap-2">
+          {/* 📝 Export to Obsidian / Notion Button */}
+          <button
+            onClick={() => setShowExportModal(true)}
+            className="text-xs font-bold px-3 py-1.5 rounded-lg bg-purple-50 dark:bg-purple-950/40 text-purple-600 dark:text-purple-300 border border-purple-200 dark:border-purple-800 flex items-center gap-1.5 hover:bg-purple-100 dark:hover:bg-purple-900/40 transition-colors shadow-sm"
+            title="Export problem notes and chapters to Obsidian or Notion"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Export to Obsidian</span>
+          </button>
+
           {/* 🎙️ Batch Auto-Transcriber */}
           <button
             onClick={() => setShowBatchModal(true)}
@@ -2259,6 +2335,215 @@ export default function VaultPage() {
                   )}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* 7. 🔍 GLOBAL TRANSCRIPT SEARCH MODAL (Ctrl+K) */}
+      {showGlobalSearch && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-start justify-center p-4 pt-16 z-50">
+          <div className="bg-white dark:bg-[#0f172a] border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-3xl shadow-2xl space-y-3 max-h-[85vh] flex flex-col overflow-hidden">
+            {/* Search Input Header */}
+            <div className="p-4 pb-2 border-b border-slate-200 dark:border-slate-800">
+              <div className="flex items-center gap-3">
+                <Search className="w-5 h-5 text-cyan-500 shrink-0" />
+                <input
+                  type="text"
+                  placeholder="Search verbatim transcripts & chapters across all 58+ videos (e.g. Redis Lua, Cassandra, H3)..."
+                  value={globalSearchQuery}
+                  onChange={(e) => {
+                    setGlobalSearchQuery(e.target.value);
+                    handleSearchTranscripts(e.target.value, globalSearchChannel);
+                  }}
+                  className="w-full bg-transparent text-sm sm:text-base text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none"
+                  autoFocus
+                />
+                <button
+                  onClick={() => setShowGlobalSearch(false)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-white"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Filter Chips inside search modal */}
+              <div className="flex items-center gap-1.5 pt-3 overflow-x-auto">
+                <span className="text-[10px] uppercase font-bold text-slate-400 mr-1">Channel:</span>
+                <button
+                  onClick={() => {
+                    setGlobalSearchChannel("ALL");
+                    handleSearchTranscripts(globalSearchQuery, "ALL");
+                  }}
+                  className={`text-[10px] font-bold px-2 py-0.5 rounded-md transition-colors ${
+                    globalSearchChannel === "ALL"
+                      ? "bg-cyan-500 text-slate-950 font-bold"
+                      : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400"
+                  }`}
+                >
+                  All Channels
+                </button>
+                {channels.map((ch) => (
+                  <button
+                    key={ch.id}
+                    onClick={() => {
+                      setGlobalSearchChannel(ch.id);
+                      handleSearchTranscripts(globalSearchQuery, ch.id);
+                    }}
+                    className={`text-[10px] font-medium px-2 py-0.5 rounded-md truncate max-w-[130px] transition-colors ${
+                      globalSearchChannel === ch.id
+                        ? "bg-cyan-500 text-slate-950 font-bold"
+                        : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400"
+                    }`}
+                  >
+                    {ch.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Results Area */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
+              {globalSearchLoading ? (
+                <div className="py-12 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
+                  <RefreshCw className="w-4 h-4 animate-spin text-cyan-500" />
+                  Searching transcripts across entire library...
+                </div>
+              ) : globalSearchResults.length > 0 ? (
+                globalSearchResults.map((res, idx) => (
+                  <div
+                    key={idx}
+                    onClick={() => {
+                      setSelectedVideoId(res.video_id);
+                      setShowGlobalSearch(false);
+                      seekTo(res.timestamp_sec);
+                    }}
+                    className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/60 hover:bg-slate-100 dark:hover:bg-slate-800/80 border border-slate-200/80 dark:border-slate-800 cursor-pointer transition-all space-y-1.5 group hover:border-cyan-500/50 shadow-sm"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 truncate">
+                        <span className="text-xs font-bold text-slate-900 dark:text-white group-hover:text-cyan-500 dark:group-hover:text-cyan-400 transition-colors truncate">
+                          {res.video_title}
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-medium shrink-0">
+                          • {res.channel_name}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                          {res.source_type === "chapter_milestone" ? "📌 Chapter" : "📜 Verbatim"}
+                        </span>
+                        <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 group-hover:bg-cyan-500 group-hover:text-slate-950 transition-colors">
+                          {res.timestamp_label}
+                        </span>
+                      </div>
+                    </div>
+                    <p
+                      className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed font-sans"
+                      dangerouslySetInnerHTML={{ __html: res.snippet }}
+                    />
+                  </div>
+                ))
+              ) : globalSearchQuery.trim() ? (
+                <div className="py-12 text-center text-xs text-slate-400">
+                  No transcript matches found for "{globalSearchQuery}". Try different keywords.
+                </div>
+              ) : (
+                <div className="py-12 text-center text-xs text-slate-400 space-y-2">
+                  <Search className="w-8 h-8 text-slate-300 dark:text-slate-700 mx-auto" />
+                  <p>Type keywords to search across all video transcripts in real-time.</p>
+                  <p className="text-[11px] text-slate-500">Examples: <code>"Redis Lua"</code>, <code>"Kafka partition"</code>, <code>"Cassandra"</code>, <code>"H3 hexagon"</code>, <code>"S3 presigned"</code></p>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="px-4 py-2.5 bg-slate-50 dark:bg-slate-900/80 border-t border-slate-200 dark:border-slate-800 text-[11px] text-slate-400 flex items-center justify-between">
+              <span>Press <kbd className="px-1 py-0.5 bg-slate-200 dark:bg-slate-800 rounded font-mono">Esc</kbd> to close</span>
+              <span>{globalSearchResults.length} matches found</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 8. 📝 OBSIDIAN & NOTION EXPORT MODAL */}
+      {showExportModal && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white dark:bg-[#0f172a] border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-purple-500/20 text-purple-400 flex items-center justify-center">
+                  <Download className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Export to Obsidian / Notion
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Export study notes, chapters, diagrams & transcripts formatted for your second brain.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowExportModal(false)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {/* Option 1: Current Video Markdown */}
+              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-cyan-500" />
+                    Current Problem Note (.md)
+                  </h4>
+                  <span className="text-[10px] text-slate-400 font-mono">1 file</span>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                  Includes YAML frontmatter, roadmap chapters with clickable timestamp links, architecture takeaways, and verbatim transcript appendix.
+                </p>
+                <div className="flex gap-2 pt-1">
+                  <button
+                    onClick={handleDownloadSingleMarkdown}
+                    className="flex-1 py-2 px-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-sm"
+                  >
+                    <Download className="w-3.5 h-3.5" /> Download Markdown (.md)
+                  </button>
+                  <button
+                    onClick={handleCopyMarkdownToClipboard}
+                    className="py-2 px-3 rounded-lg bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                  >
+                    {copiedMarkdownText ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copiedMarkdownText ? "Copied!" : "Copy Text"}
+                  </button>
+                </div>
+              </div>
+
+              {/* Option 2: Full Obsidian Vault ZIP */}
+              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <Layers className="w-4 h-4 text-purple-500" />
+                    Complete Obsidian Vault (.zip)
+                  </h4>
+                  <span className="text-[10px] text-purple-500 font-bold px-1.5 py-0.5 rounded bg-purple-500/10">All 58 Problems</span>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                  Generates an interconnected Zettelkasten Obsidian vault containing an <code>Index.md</code> master catalog, individual problem notes, and <code>[[wikilinks]]</code> between alternative solutions.
+                </p>
+                <button
+                  onClick={handleDownloadFullVault}
+                  className="w-full py-2.5 px-4 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors shadow-sm"
+                >
+                  <Download className="w-4 h-4" /> Download Full Vault ZIP
+                </button>
+              </div>
+            </div>
+
+            <div className="pt-2 text-[11px] text-slate-400 text-center">
+              Compatible with Obsidian, Notion, Logseq, Bear, and standard Markdown editors.
             </div>
           </div>
         </div>
