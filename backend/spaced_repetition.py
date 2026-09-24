@@ -1,7 +1,7 @@
 """
 SuperMemo-2 (SM-2) Spaced Repetition Algorithm Implementation
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Tuple
 
 def calculate_sm2_review(
@@ -44,5 +44,5 @@ def calculate_sm2_review(
             new_interval = round(interval_days * new_ef, 1)
         new_rep = repetition + 1
 
-    next_review = datetime.utcnow() + timedelta(days=new_interval)
+    next_review = datetime.now(timezone.utc) + timedelta(days=new_interval)
     return new_rep, new_interval, round(new_ef, 3), next_review
